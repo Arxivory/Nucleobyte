@@ -1,0 +1,43 @@
+# ==========================================
+# NucleoByte Project GitIgnore Configuration
+# ==========================================
+
+# --- Python Virtual Environment ---
+venv/
+env/
+ENV/
+*.pyc
+*.pyo
+*.pyd
+__pycache__/
+*.egg-info/
+dist/
+build/
+
+# --- CMake Build Artifacts (Universal) ---
+CMakeCache.txt
+CMakeFiles/
+CMakeScripts/
+Makefile
+cmake_install.cmake
+install_manifest.txt
+compile_commands.json
+
+# --- Visual Studio 2022 Specific Files ---
+.vs/
+out/
+ARM64/
+x64/
+x86/
+*.sln
+*.vcxproj
+*.filters
+*.user
+*.suo
+*.db
+*.opendb
+
+# --- CUDA Profiling & Local Outputs ---
+*.ncu-rep
+*.nsys-rep
+*.log
