@@ -185,3 +185,42 @@ std::vector<float> launch_block_sparse_attn(
 
     return h_O;
 }
+
+void launch_block_sparse_attn_ptr(
+    const float* h_Q,
+    const float* h_K,
+    const float* h_V,
+    float* h_O,
+    int num_tokens,
+    int head_dim,
+    int window_radius
+) {
+    int num_blocks = num_tokens / BLOCK_SIZE;
+    size_t matrix_size = num_tokens * head_dim * sizeof(float);
+    float scale = 1.0f / std::sqrt(static_cast<float>(head_dim));
+
+    float* d_Q = nullptr, * d_K = nullptr, * d_V = nullptr, * d_O = nullptr;
+    cudaMalloc(&d_Q, matrix_size);
+    cudaMalloc(&d_K, matrix_size);
+    cudaMalloc(&d_V, matrix_size);
+    cudaMalloc(&d_O, matrix_size);
+
+    cudaMemcpy(d_Q, h_Q, matrix_size, cudaMemcpyHostToDevice);
+    cudaMemcpy(d_K, h_K, matrix_size, cudaMemcpyHostToDevice);
+    cudaMemcpy(d_V, h_V, matrix_size, cudaMemcpyHostToDevice);
+
+    dim3 grid_size(num_blocks);
+    dim3 block_size(BLOCK_SIZE, BLOCK_SIZE);
+
+    block_sparse_attn_kernel << <grid_size, block_size >> > (
+        d_Q, d_K, d_V, d_O, num_tokens, num_blocks, window_radius, scale
+        );
+
+    cudaDeviceSynchronize();
+    cudaMemcpy(h_O, d_O, matrix_size, cudaMemcpyDeviceToHost);
+
+    cudaFree(d_Q);
+    cudaFree(d_K);
+    cudaFree(d_V);
+    cudaFree(d_O);
+}

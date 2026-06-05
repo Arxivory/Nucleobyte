@@ -25,35 +25,24 @@ class CUDABlockSparseAttention:
         self.block_size = block_size
 
     def __call__(self, Q, K, V):
-        """
-        Executes the custom block-sparse hybrid attention kernel.
-        Accepts PyTorch tensors or NumPy arrays of shape [Num_Tokens, Head_Dim].
-        """
-        is_torch = False
-        device = None
+        is_torch = hasattr(Q, "detach")
+        device = Q.device if is_torch else None
 
-        if hasattr(Q, "detach"):
-            is_torch = True
-            device = Q.device
-            Q_np = Q.detach().cpu().numpy()
-            K_np = K.detach().cpu().numpy()
-            V_np = V.detach().cpu().numpy()
+        if is_torch:
+            Q_np = Q.detach().cpu().contiguous().numpy()
+            K_np = K.detach().cpu().contiguous().numpy()
+            V_np = V.detach().cpu().contiguous().numpy()
         else:
-            Q_np = np.asarray(Q)
-            K_np = np.asarray(K)
-            V_np = np.asarray(V)
+            Q_np = np.ascontiguousarray(Q, dtype=np.float32)
+            K_np = np.ascontiguousarray(K, dtype=np.float32)
+            V_np = np.ascontiguousarray(V, dtype=np.float32)
 
         num_tokens, head_dim = Q_np.shape
+        out_np = np.empty_block = np.zeros_like(Q_np)
 
-        h_Q = Q_np.flatten().tolist()
-        h_K = K_np.flatten().tolist()
-        h_V = V_np.flatten().tolist()
-
-        h_O = _core.launch_block_sparse_attn(
-            h_Q, h_K, h_V, num_tokens, head_dim, self.window_radius
+        _core.launch_block_sparse_attn_ptr(
+            Q_np, K_np, V_np, out_np, num_tokens, head_dim, self.window_radius
         )
-
-        out_np = np.array(h_O, dtype=np.float32).reshape(num_tokens, head_dim)
 
         if is_torch:
             import torch
