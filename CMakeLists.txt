@@ -6,7 +6,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 set(CMAKE_CUDA_STANDARD 17)
 set(CMAKE_CUDA_STANDARD_REQUIRED ON)
-set(CMAKE_CUDA_ARCHITECTURES "86;89;90") 
+set(CMAKE_CUDA_ARCHITECTURES "61;61-virtual") 
 
 set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL")
 
@@ -34,6 +34,7 @@ pybind11_add_module(_core MODULE ${SRC_FILES})
 target_compile_features(_core PRIVATE cxx_std_20)
 set_target_properties(_core PROPERTIES 
     CUDA_SEPARABLE_COMPILATION ON
+    CUDA_LINK_WITH_NVCC ON
     PREFIX ""
     SUFFIX ".pyd"
 )
