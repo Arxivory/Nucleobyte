@@ -10,11 +10,11 @@ std::vector<float> launch_block_sparse_attn(
     int window_radius
 );
 
-void launch_block_sparse_attn_ptr(
-    const float* h_Q,
-    const float* h_K,
-    const float* h_V,
-    float* h_O,
+void launch_block_sparse_attn_device(
+    const float* d_Q,
+    const float* d_K,
+    const float* d_V,
+    float* d_O,
     int num_tokens,
     int head_dim,
     int window_radius

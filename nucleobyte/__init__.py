@@ -1,6 +1,7 @@
 import sys
 import os
 import numpy as np
+import torch
 
 try:
     import _core
@@ -25,26 +26,22 @@ class CUDABlockSparseAttention:
         self.block_size = block_size
 
     def __call__(self, Q, K, V):
-        is_torch = hasattr(Q, "detach")
-        device = Q.device if is_torch else None
-
-        if is_torch:
-            Q_np = Q.detach().cpu().contiguous().numpy()
-            K_np = K.detach().cpu().contiguous().numpy()
-            V_np = V.detach().cpu().contiguous().numpy()
-        else:
-            Q_np = np.ascontiguousarray(Q, dtype=np.float32)
-            K_np = np.ascontiguousarray(K, dtype=np.float32)
-            V_np = np.ascontiguousarray(V, dtype=np.float32)
-
+        if hasattr(Q, "is_cuda") and Q.is_cuda:
+            num_tokens, head_dim = Q.shape
+            
+            out = torch.zeros_like(Q)
+            
+            _core.launch_block_sparse_attn_device(
+                Q.data_ptr(), K.data_ptr(), V.data_ptr(), out.data_ptr(),
+                num_tokens, head_dim, self.window_radius
+            )
+            return out
+        
+        import numpy as np
+        Q_np = np.ascontiguousarray(Q, dtype=np.float32)
+        K_np = np.ascontiguousarray(K, dtype=np.float32)
+        V_np = np.ascontiguousarray(V, dtype=np.float32)
         num_tokens, head_dim = Q_np.shape
-        out_np = np.empty_block = np.zeros_like(Q_np)
-
-        _core.launch_block_sparse_attn_ptr(
-            Q_np, K_np, V_np, out_np, num_tokens, head_dim, self.window_radius
-        )
-
-        if is_torch:
-            import torch
-            return torch.from_numpy(out_np).to(device)
-        return out_np
+        out_np = np.zeros_like(Q_np)
+        
+        raise NotImplementedError("For maximum performance, pass tensors already allocated on the GPU.")
