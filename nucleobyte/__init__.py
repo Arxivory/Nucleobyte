@@ -24,20 +24,21 @@ class CUDAKmerTokenizer:
 class BlockSparseAttentionFunction(Function):
     @staticmethod
     def forward(ctx, Q_heads, K_heads, V_heads, window_radius, block_size):
-        num_heads, num_tokens, head_dim = Q_heads.shape
+        batch_size, num_heads, num_tokens, head_dim = Q_heads.shape
         O_heads = torch.zeros_like(Q_heads)
 
-        LSE_heads = torch.empty((num_heads, num_tokens), dtype=torch.float32, device=Q_heads.device)
+        LSE_heads = torch.empty((batch_size, num_heads, num_tokens), dtype=torch.float32, device=Q_heads.device)
 
-        for head_idx in range(num_heads):
-            _core.launch_block_sparse_attn_device(
-                Q_heads[head_idx].data_ptr(),
-                K_heads[head_idx].data_ptr(),
-                V_heads[head_idx].data_ptr(),
-                O_heads[head_idx].data_ptr(),
-                LSE_heads[head_idx].data_ptr(),
-                num_tokens, head_dim, window_radius
-            )
+        for b in range(batch_size):
+            for head_idx in range(num_heads):
+                _core.launch_block_sparse_attn_device(
+                    Q_heads[b, head_idx].data_ptr(),
+                    K_heads[b, head_idx].data_ptr(),
+                    V_heads[b, head_idx].data_ptr(),
+                    O_heads[b, head_idx].data_ptr(),
+                    LSE_heads[b, head_idx].data_ptr(),
+                    num_tokens, head_dim, window_radius
+                )
 
         ctx.save_for_backward(Q_heads, K_heads, V_heads, LSE_heads)
         ctx.window_radius = window_radius
@@ -47,7 +48,7 @@ class BlockSparseAttentionFunction(Function):
     @staticmethod
     def backward(ctx, grad_output):
         Q_heads, K_heads, V_heads, LSE_heads = ctx.saved_tensors
-        num_heads, num_tokens, head_dim = Q_heads.shape
+        batch_size, num_heads, num_tokens, head_dim = Q_heads.shape
 
         grad_Q = torch.zeros_like(Q_heads)
         grad_K = torch.zeros_like(K_heads)
@@ -55,18 +56,19 @@ class BlockSparseAttentionFunction(Function):
 
         grad_output_contig = grad_output.contiguous()
 
-        for head_idx in range(num_heads):
-            _core.launch_block_sparse_attn_backward_device(
-                grad_output_contig[head_idx].data_ptr(),
-                Q_heads[head_idx].data_ptr(),
-                K_heads[head_idx].data_ptr(),
-                V_heads[head_idx].data_ptr(),
-                LSE_heads[head_idx].data_ptr(),
-                grad_Q[head_idx].data_ptr(),
-                grad_K[head_idx].data_ptr(),
-                grad_V[head_idx].data_ptr(),
-                num_tokens, head_dim, ctx.window_radius
-            )
+        for b in range(batch_size):
+            for head_idx in range(num_heads):
+                _core.launch_block_sparse_attn_backward_device(
+                    grad_output_contig[b, head_idx].data_ptr(),
+                    Q_heads[b, head_idx].data_ptr(),
+                    K_heads[b, head_idx].data_ptr(),
+                    V_heads[b, head_idx].data_ptr(),
+                    LSE_heads[b, head_idx].data_ptr(),
+                    grad_Q[b, head_idx].data_ptr(),
+                    grad_K[b, head_idx].data_ptr(),
+                    grad_V[b, head_idx].data_ptr(),
+                    num_tokens, head_dim, ctx.window_radius
+                )
 
         return grad_Q, grad_K, grad_V, None, None
 
@@ -88,21 +90,21 @@ class NucleoByteBlockSparseAttention(nn.Module):
         self.out_proj = nn.Linear(embed_dim, embed_dim, bias=False)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        num_tokens, embed_dim = x.shape
+        batch_size, num_tokens, embed_dim = x.shape
         
         Q = self.q_proj(x) 
         K = self.k_proj(x) 
-        H = self.v_proj(x) 
+        V = self.v_proj(x) 
 
-        Q_heads = Q.view(num_tokens, self.num_heads, self.head_dim).transpose(0, 1).contiguous()
-        K_heads = K.view(num_tokens, self.num_heads, self.head_dim).transpose(0, 1).contiguous()
-        V_heads = H.view(num_tokens, self.num_heads, self.head_dim).transpose(0, 1).contiguous()
+        Q_heads = Q.view(batch_size, num_tokens, self.num_heads, self.head_dim).permute(0, 2, 1, 3).contiguous()
+        K_heads = K.view(batch_size, num_tokens, self.num_heads, self.head_dim).permute(0, 2, 1, 3).contiguous()
+        V_heads = V.view(batch_size, num_tokens, self.num_heads, self.head_dim).permute(0, 2, 1, 3).contiguous()
 
         O_heads = BlockSparseAttentionFunction.apply(
             Q_heads, K_heads, V_heads, self.window_radius, self.block_size
         )
 
-        O_combined = O_heads.transpose(0, 1).contiguous().view(num_tokens, embed_dim)
+        O_combined = O_heads.permute(0, 2, 1, 3).contiguous().view(batch_size, num_tokens, embed_dim)
         return self.out_proj(O_combined)
 
 

@@ -4,6 +4,6 @@ import os
 setup(
     name="nucleobyte",
     version="0.1.0",
-    packages=["nucleobyte"],
+    packages=["nucleobyte", "nucleodataloader"],
     zip_safe=False,
 )
