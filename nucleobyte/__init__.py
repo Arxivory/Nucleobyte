@@ -24,12 +24,10 @@ class CUDAKmerTokenizer:
 class BlockSparseAttentionFunction(Function):
     @staticmethod
     def forward(ctx, Q_heads, K_heads, V_heads, window_radius, block_size):
-        ctx.save_for_backward(Q_heads, K_heads, V_heads)
-        ctx.window_radius = window_radius
-        ctx.block_size = block_size
-
         num_heads, num_tokens, head_dim = Q_heads.shape
         O_heads = torch.zeros_like(Q_heads)
+
+        LSE_heads = torch.empty((num_heads, num_tokens), dtype=torch.float32, device=Q_heads.device)
 
         for head_idx in range(num_heads):
             _core.launch_block_sparse_attn_device(
@@ -37,16 +35,39 @@ class BlockSparseAttentionFunction(Function):
                 K_heads[head_idx].data_ptr(),
                 V_heads[head_idx].data_ptr(),
                 O_heads[head_idx].data_ptr(),
+                LSE_heads[head_idx].data_ptr(),
                 num_tokens, head_dim, window_radius
             )
+
+        ctx.save_for_backward(Q_heads, K_heads, V_heads, LSE_heads)
+        ctx.window_radius = window_radius
+        ctx.block_size = block_size
         return O_heads
 
     @staticmethod
     def backward(ctx, grad_output):
-        Q_heads, K_heads, V_heads = ctx.saved_tensors
-        grad_Q = torch.ones_like(Q_heads) * 0.1  
-        grad_K = torch.ones_like(K_heads) * 0.1
-        grad_V = grad_output.clone() 
+        Q_heads, K_heads, V_heads, LSE_heads = ctx.saved_tensors
+        num_heads, num_tokens, head_dim = Q_heads.shape
+
+        grad_Q = torch.zeros_like(Q_heads)
+        grad_K = torch.zeros_like(K_heads)
+        grad_V = torch.zeros_like(V_heads)
+
+        grad_output_contig = grad_output.contiguous()
+
+        for head_idx in range(num_heads):
+            _core.launch_block_sparse_attn_backward_device(
+                grad_output_contig[head_idx].data_ptr(),
+                Q_heads[head_idx].data_ptr(),
+                K_heads[head_idx].data_ptr(),
+                V_heads[head_idx].data_ptr(),
+                LSE_heads[head_idx].data_ptr(),
+                grad_Q[head_idx].data_ptr(),
+                grad_K[head_idx].data_ptr(),
+                grad_V[head_idx].data_ptr(),
+                num_tokens, head_dim, ctx.window_radius
+            )
+
         return grad_Q, grad_K, grad_V, None, None
 
 

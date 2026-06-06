@@ -36,6 +36,7 @@ __global__ void block_sparse_attn_kernel(
     const float* __restrict__ d_K,
     const float* __restrict__ d_V,
     float* __restrict__ d_O,
+    float* __restrict__ d_LSE,
     int num_tokens,
     int num_blocks,
     int window_radius,
@@ -141,6 +142,9 @@ __global__ void block_sparse_attn_kernel(
     if (global_row < num_tokens && d_prev > 0.0f) {
         d_O[global_row * HEAD_DIM + thread_x] = o_local[0] / d_prev;
         d_O[global_row * HEAD_DIM + 32 + thread_x] = o_local[1] / d_prev;
+        if (thread_x == 0) {
+            d_LSE[global_row] = m_prev + logf(d_prev);
+        }
     }
 }
 
@@ -172,7 +176,7 @@ std::vector<float> launch_block_sparse_attn(
     dim3 block_size(BLOCK_SIZE, BLOCK_SIZE);
 
     block_sparse_attn_kernel << <grid_size, block_size >> > (
-        d_Q, d_K, d_V, d_O, num_tokens, num_blocks, window_radius, scale
+        d_Q, d_K, d_V, d_O, nullptr, num_tokens, num_blocks, window_radius, scale
         );
 
     cudaDeviceSynchronize();
@@ -191,6 +195,7 @@ void launch_block_sparse_attn_device(
     const float* d_K,
     const float* d_V,
     float* d_O,
+    float* d_LSE,
     int num_tokens,
     int head_dim,
     int window_radius
@@ -202,6 +207,164 @@ void launch_block_sparse_attn_device(
     dim3 block_size(BLOCK_SIZE, BLOCK_SIZE);
 
     block_sparse_attn_kernel << <grid_size, block_size >> > (
-        d_Q, d_K, d_V, d_O, num_tokens, num_blocks, window_radius, scale
+        d_Q, d_K, d_V, d_O, d_LSE, num_tokens, num_blocks, window_radius, scale
+        );
+}
+
+__global__ void block_sparse_attn_backward_kernel(
+    const float* __restrict__ d_grad_O,
+    const float* __restrict__ d_Q,
+    const float* __restrict__ d_K,
+    const float* __restrict__ d_V,
+    const float* __restrict__ d_LSE,
+    float* __restrict__ d_grad_Q,
+    float* __restrict__ d_grad_K,
+    float* __restrict__ d_grad_V,
+    int num_tokens,
+    int num_blocks,
+    int window_radius,
+    float scale
+) {
+    int block_row = blockIdx.x;
+    int tx = threadIdx.x;
+    int ty = threadIdx.y;
+
+    int global_row_idx = block_row * BLOCK_SIZE + tx;
+
+    __shared__ float s_Q[BLOCK_SIZE][64];
+    __shared__ float s_dO[BLOCK_SIZE][64];
+    __shared__ float s_K[BLOCK_SIZE][64];
+    __shared__ float s_V[BLOCK_SIZE][64];
+    __shared__ float s_S[BLOCK_SIZE][BLOCK_SIZE];
+
+    float reg_grad_Q_acc1 = 0.0f;
+    float reg_grad_Q_acc2 = 0.0f;
+
+    if (global_row_idx < num_tokens) {
+        s_Q[tx][ty] = d_Q[global_row_idx * 64 + ty];
+        s_Q[tx][ty + 32] = d_Q[global_row_idx * 64 + ty + 32];
+
+        s_dO[tx][ty] = d_grad_O[global_row_idx * 64 + ty];
+        s_dO[tx][ty + 32] = d_grad_O[global_row_idx * 64 + ty + 32];
+    }
+    __syncthreads();
+
+    for (int block_col = 0; block_col < num_blocks; ++block_col) {
+
+        bool is_global_anchor = (block_col == 0);
+        bool is_local_window = (abs(block_row - block_col) <= window_radius);
+
+        if (!is_global_anchor && !is_local_window) {
+            continue;
+        }
+
+        int global_col_idx = block_col * BLOCK_SIZE + tx;
+
+        if (global_col_idx < num_tokens) {
+            s_K[tx][ty] = d_K[global_col_idx * 64 + ty];
+            s_K[tx][ty + 32] = d_K[global_col_idx * 64 + ty + 32];
+
+            s_V[tx][ty] = d_V[global_col_idx * 64 + ty];
+            s_V[tx][ty + 32] = d_V[global_col_idx * 64 + ty + 32];
+        }
+        __syncthreads();
+
+
+        float raw_score = 0.0f;
+        if (global_row_idx < num_tokens) {
+            for (int d = 0; d < 64; ++d) {
+                raw_score += s_Q[tx][d] * s_K[ty][d];
+            }
+            raw_score *= scale;
+
+            float token_lse = d_LSE[global_row_idx];
+            s_S[tx][ty] = expf(raw_score - token_lse);
+        }
+        else {
+            s_S[tx][ty] = 0.0f;
+        }
+        __syncthreads();
+
+        int global_col_token = block_col * BLOCK_SIZE + ty;
+        if (global_col_token < num_tokens) {
+            float gv_acc1 = 0.0f;
+            float gv_acc2 = 0.0f;
+            for (int k = 0; k < BLOCK_SIZE; ++k) {
+                float p_ij = s_S[k][ty];
+                gv_acc1 += p_ij * s_dO[k][tx];
+                gv_acc2 += p_ij * s_dO[k][tx + 32];
+            }
+            atomicAdd(&d_grad_V[global_col_token * 64 + tx], gv_acc1);
+            atomicAdd(&d_grad_V[global_col_token * 64 + tx + 32], gv_acc2);
+        }
+
+        float grad_P_ij = 0.0f;
+        if (global_row_idx < num_tokens) {
+            for (int d = 0; d < 64; ++d) {
+                grad_P_ij += s_dO[tx][d] * s_V[ty][d];
+            }
+        }
+
+        float local_p_ij = s_S[tx][ty];
+        float intermediate_delta = grad_P_ij * local_p_ij;
+
+        s_S[tx][ty] = intermediate_delta;
+        __syncthreads();
+
+        if (global_row_idx < num_tokens) {
+            float row_delta = 0.0f;
+            for (int j = 0; j < BLOCK_SIZE; ++j) {
+                row_delta += s_S[tx][j];
+            }
+            s_S[tx][ty] = local_p_ij * (grad_P_ij - row_delta);
+        }
+        else {
+            s_S[tx][ty] = 0.0f;
+        }
+        __syncthreads();
+
+        if (global_row_idx < num_tokens) {
+            for (int k = 0; k < BLOCK_SIZE; ++k) {
+                float grad_S_ik = s_S[tx][k];
+                reg_grad_Q_acc1 += grad_S_ik * s_K[k][ty] * scale;
+                reg_grad_Q_acc2 += grad_S_ik * s_K[k][ty + 32] * scale;
+            }
+        }
+
+        if (global_col_token < num_tokens) {
+            float gk_acc1 = 0.0f;
+            float gk_acc2 = 0.0f;
+            for (int k = 0; k < BLOCK_SIZE; ++k) {
+                float grad_S_kj = s_S[k][ty];
+                gk_acc1 += grad_S_kj * s_Q[k][tx] * scale;
+                gk_acc2 += grad_S_kj * s_Q[k][tx + 32] * scale;
+            }
+            atomicAdd(&d_grad_K[global_col_token * 64 + tx], gk_acc1);
+            atomicAdd(&d_grad_K[global_col_token * 64 + tx + 32], gk_acc2);
+        }
+
+        __syncthreads();
+    }
+
+    if (global_row_idx < num_tokens) {
+        d_grad_Q[global_row_idx * 64 + ty] = reg_grad_Q_acc1;
+        d_grad_Q[global_row_idx * 64 + ty + 32] = reg_grad_Q_acc2;
+    }
+}
+
+void launch_block_sparse_attn_backward_device(
+    const float* d_grad_O, const float* d_Q, const float* d_K, const float* d_V,
+    const float* d_LSE, float* d_grad_Q, float* d_grad_K, float* d_grad_V,
+    int num_tokens, int head_dim, int window_radius
+) {
+    int num_blocks = num_tokens / BLOCK_SIZE;
+    float scale = 1.0f / std::sqrt(static_cast<float>(head_dim));
+
+    dim3 grid_size(num_blocks);
+    dim3 block_size(BLOCK_SIZE, BLOCK_SIZE);
+
+    block_sparse_attn_backward_kernel << <grid_size, block_size >> > (
+        d_grad_O, d_Q, d_K, d_V, d_LSE, d_grad_Q, d_grad_K, d_grad_V,
+        num_tokens, num_blocks, window_radius, scale
         );
 }
