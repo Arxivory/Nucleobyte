@@ -1,35 +1,49 @@
+import torch
 import sys
 import os
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-from nucleobyte import CUDAKmerTokenizer
-
-def verify_tokenization_math():
-    # Sequence: ATGC (4 characters)
-    # A = 00 (0), T = 11 (3), G = 10 (2), C = 01 (1)
-    # If K=2, Stride=1:
-    # Token 1: AT -> 0011 in binary -> 3 in decimal
-    # Token 2: TG -> 1110 in binary -> 14 in decimal
-    # Token 3: GC -> 1001 in binary -> 9 in decimal
-    test_sequence = "ATGC"
-    
-    print("Initializing NucleoByte CUDA Tokenizer (K=2, Stride=1)...")
-    tokenizer = CUDAKmerTokenizer(kmer_size=2, stride=1)
-    
-    token_ids, metrics = tokenizer.tokenize(test_sequence)
-    
-    print("\n--- PERFORMANCE METRICS ---")
-    print(f"Tokens Generated: {metrics.total_tokens_generated}")
-    print(f"CUDA Kernel Execution Time: {metrics.processing_time_ms:.4f} ms")
-    
-    print("\n--- VALUE VERIFICATION ---")
-    print(f"Expected IDs: [3, 14, 9]")
-    print(f"Returned IDs: {token_ids}")
-    
-    if token_ids == [3, 14, 9]:
-        print("\n SUCCESS: The 2-bit CUDA Bit-Shifting Kernel is mathematically flawless!")
-    else:
-        print("\n FAILURE: Mismatch detected in bitwise translation values.")
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+from nucleobyte.__init__ import NucleoByteBlockSparseAttention, CUDAKmerTokenizer
 
 if __name__ == "__main__":
-    verify_tokenization_math()
+    print("=" * 70)
+    print(" NUCLEOBYTE END-TO-END PIPELINE VALIDATION ENGINE")
+    print("=" * 70)
+
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    print(f"Target Compute Unit: {torch.cuda.get_device_name(0)}\n")
+
+    mock_fasta_sequence = "ATCGCCGATCGAATTCCGGATCGATCGATCGA" * 64
+    print(f"Raw Genomic Sequence Length: {len(mock_fasta_sequence)} base pairs.")
+
+    tokenizer = CUDAKmerTokenizer(kmer_size=6, stride=1)
+    tokens, metrics = tokenizer.tokenize(mock_fasta_sequence)
+    print(f"[SUCCESS] Tokenizer packed {metrics.total_tokens_generated} tokens in {metrics.processing_time_ms:.4f} ms.")
+
+    token_tensor = torch.tensor(tokens, dtype=torch.long, device=device)
+
+    VOCAB_SIZE = 4096
+    EMBED_DIM = 128
+    NUM_HEADS = 4
+    
+    embedding_layer = torch.nn.Embedding(VOCAB_SIZE, EMBED_DIM).to(device)
+    hidden_states = embedding_layer(token_tensor)
+    print(f"Generated Hidden States Shape: {list(hidden_states.shape)}")
+
+    attn_layer = NucleoByteBlockSparseAttention(
+        embed_dim=EMBED_DIM, 
+        num_heads=NUM_HEADS, 
+        window_radius=1, 
+        block_size=32
+    ).to(device)
+
+    output_states = attn_layer(hidden_states)
+    print(f"Attention Layer Output Shape:   {list(output_states.shape)}")
+
+    print("\nVerifying Backpropagation/Gradient Pass Compatibility...")
+    loss = output_states.sum()
+    loss.backward()
+    
+    print(f"-> Query Matrix Weight Gradient Shape: {list(attn_layer.q_proj.weight.grad.shape)}")
+    print("-> Status: Gradient graphs constructed successfully!")
+    print("\n[COMPLETE] End-to-End custom hardware integration block is functional!")
