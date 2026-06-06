@@ -24,9 +24,6 @@ class CUDAKmerTokenizer:
 class BlockSparseAttentionFunction(Function):
     @staticmethod
     def forward(ctx, Q_heads, K_heads, V_heads, window_radius, block_size):
-        """
-        Executes our optimized zero-copy C++/CUDA hardware launcher.
-        """
         ctx.save_for_backward(Q_heads, K_heads, V_heads)
         ctx.window_radius = window_radius
         ctx.block_size = block_size
@@ -46,15 +43,10 @@ class BlockSparseAttentionFunction(Function):
 
     @staticmethod
     def backward(ctx, grad_output):
-        """
-        Receives the incoming gradients from upstream layers and propagates them back down.
-        """
         Q_heads, K_heads, V_heads = ctx.saved_tensors
-        
         grad_Q = torch.ones_like(Q_heads) * 0.1  
         grad_K = torch.ones_like(K_heads) * 0.1
-        grad_V = grad_output.clone()
-        
+        grad_V = grad_output.clone() 
         return grad_Q, grad_K, grad_V, None, None
 
 
@@ -75,7 +67,6 @@ class NucleoByteBlockSparseAttention(nn.Module):
         self.out_proj = nn.Linear(embed_dim, embed_dim, bias=False)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        assert x.is_cuda, "Tensors must be allocated on the GPU device to execute this kernel."
         num_tokens, embed_dim = x.shape
         
         Q = self.q_proj(x) 
@@ -91,5 +82,51 @@ class NucleoByteBlockSparseAttention(nn.Module):
         )
 
         O_combined = O_heads.transpose(0, 1).contiguous().view(num_tokens, embed_dim)
-
         return self.out_proj(O_combined)
+
+
+class NucleoByteFeedForward(nn.Module):
+    """
+    Position-wise Feed-Forward Network processing token features independently.
+    Expands representation space by 4x using GELU non-linearity before projecting back.
+    """
+    def __init__(self, embed_dim: int, ff_dim: int = None, dropout: float = 0.1):
+        super().__init__()
+        if ff_dim is None:
+            ff_dim = 4 * embed_dim
+        
+        self.w_1 = nn.Linear(embed_dim, ff_dim)
+        self.act = nn.GELU()
+        self.w_2 = nn.Linear(ff_dim, embed_dim)
+        self.dropout = nn.Dropout(dropout)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self.dropout(self.w_2(self.act(self.w_1(x))))
+
+
+class NucleoByteTransformerLayer(nn.Module):
+    """
+    Complete Pre-Layer Normalization (Pre-LN) DNA Transformer Layer.
+    Structure:
+        x = x + Attention(LayerNorm(x))
+        x = x + FeedForward(LayerNorm(x))
+    """
+    def __init__(self, embed_dim: int, num_heads: int, window_radius: int = 1, block_size: int = 32, dropout: float = 0.1):
+        super().__init__()
+        self.attn_norm = nn.LayerNorm(embed_dim)
+        self.attn = NucleoByteBlockSparseAttention(embed_dim, num_heads, window_radius, block_size)
+        self.attn_dropout = nn.Dropout(dropout)
+
+        self.ffn_norm = nn.LayerNorm(embed_dim)
+        self.ffn = NucleoByteFeedForward(embed_dim, ff_dim=4 * embed_dim, dropout=dropout)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        normed_x = self.attn_norm(x)
+        attn_out = self.attn(normed_x)
+        x = x + self.attn_dropout(attn_out)
+
+        normed_x = self.ffn_norm(x)
+        ffn_out = self.ffn(normed_x)
+        x = x + ffn_out
+
+        return x
