@@ -33,7 +33,7 @@ __global__ void fused_tokenize_kernel(
         token_id = (token_id << 2) | bit_val;
     }
 
-    d_tokens[idx] = token_id;
+    d_tokens[idx] = token_id + 1;
 }
 
 std::vector<int> launch_fused_tokenizer(

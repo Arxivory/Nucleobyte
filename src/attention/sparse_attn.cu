@@ -156,7 +156,7 @@ std::vector<float> launch_block_sparse_attn(
     int head_dim,
     int window_radius
 ) {
-    int num_blocks = num_tokens / BLOCK_SIZE;
+    int num_blocks = (num_tokens + BLOCK_SIZE - 1) / BLOCK_SIZE;
     size_t matrix_size = num_tokens * head_dim * sizeof(float);
     float scale = 1.0f / std::sqrt(static_cast<float>(head_dim));
 
@@ -200,7 +200,7 @@ void launch_block_sparse_attn_device(
     int head_dim,
     int window_radius
 ) {
-    int num_blocks = num_tokens / BLOCK_SIZE;
+    int num_blocks = (num_tokens + BLOCK_SIZE - 1) / BLOCK_SIZE;
     float scale = 1.0f / std::sqrt(static_cast<float>(head_dim));
 
     dim3 grid_size(num_blocks);
@@ -216,6 +216,7 @@ __global__ void block_sparse_attn_backward_kernel(
     const float* __restrict__ d_Q,
     const float* __restrict__ d_K,
     const float* __restrict__ d_V,
+    const float* __restrict__ d_O,
     const float* __restrict__ d_LSE,
     float* __restrict__ d_grad_Q,
     float* __restrict__ d_grad_K,
@@ -230,6 +231,13 @@ __global__ void block_sparse_attn_backward_kernel(
     int ty = threadIdx.y;
 
     int global_row_idx = block_row * BLOCK_SIZE + tx;
+
+    float Di = 0.0f;
+    if (global_row_idx < num_tokens) {
+        for (int d = 0; d < 64; ++d) {
+            Di += d_grad_O[global_row_idx * 64 + d] * d_O[global_row_idx * 64 + d];
+        }
+    }
 
     __shared__ float s_Q[BLOCK_SIZE][64];
     __shared__ float s_dO[BLOCK_SIZE][64];
@@ -250,7 +258,6 @@ __global__ void block_sparse_attn_backward_kernel(
     __syncthreads();
 
     for (int block_col = 0; block_col < num_blocks; ++block_col) {
-
         bool is_global_anchor = (block_col == 0);
         bool is_local_window = (abs(block_row - block_col) <= window_radius);
 
@@ -268,7 +275,6 @@ __global__ void block_sparse_attn_backward_kernel(
             s_V[tx][ty + 32] = d_V[global_col_idx * 64 + ty + 32];
         }
         __syncthreads();
-
 
         float raw_score = 0.0f;
         if (global_row_idx < num_tokens) {
@@ -306,17 +312,11 @@ __global__ void block_sparse_attn_backward_kernel(
         }
 
         float local_p_ij = s_S[tx][ty];
-        float intermediate_delta = grad_P_ij * local_p_ij;
 
-        s_S[tx][ty] = intermediate_delta;
         __syncthreads();
 
         if (global_row_idx < num_tokens) {
-            float row_delta = 0.0f;
-            for (int j = 0; j < BLOCK_SIZE; ++j) {
-                row_delta += s_S[tx][j];
-            }
-            s_S[tx][ty] = local_p_ij * (grad_P_ij - row_delta);
+            s_S[tx][ty] = local_p_ij * (grad_P_ij - Di);
         }
         else {
             s_S[tx][ty] = 0.0f;
@@ -354,17 +354,17 @@ __global__ void block_sparse_attn_backward_kernel(
 
 void launch_block_sparse_attn_backward_device(
     const float* d_grad_O, const float* d_Q, const float* d_K, const float* d_V,
-    const float* d_LSE, float* d_grad_Q, float* d_grad_K, float* d_grad_V,
+    const float* d_O, const float* d_LSE, float* d_grad_Q, float* d_grad_K, float* d_grad_V,
     int num_tokens, int head_dim, int window_radius
 ) {
-    int num_blocks = num_tokens / BLOCK_SIZE;
+    int num_blocks = (num_tokens + BLOCK_SIZE - 1) / BLOCK_SIZE;
     float scale = 1.0f / std::sqrt(static_cast<float>(head_dim));
 
     dim3 grid_size(num_blocks);
     dim3 block_size(BLOCK_SIZE, BLOCK_SIZE);
 
     block_sparse_attn_backward_kernel << <grid_size, block_size >> > (
-        d_grad_O, d_Q, d_K, d_V, d_LSE, d_grad_Q, d_grad_K, d_grad_V,
+        d_grad_O, d_Q, d_K, d_V, d_O, d_LSE, d_grad_Q, d_grad_K, d_grad_V,
         num_tokens, num_blocks, window_radius, scale
         );
 }

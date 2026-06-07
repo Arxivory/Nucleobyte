@@ -36,7 +36,7 @@ class NucleoByteDataset(Dataset):
     def __getitem__(self, idx):
         seq = self.sequences[idx]
         if len(seq) > self.max_sequence_length:
-            start = random.randint(0, len(seq) - self.max_sequence_length)
+            start = 0
             seq = seq[start:start + self.max_sequence_length]
         return seq
 
@@ -61,13 +61,13 @@ class GenomicMLMCollator:
                 tokens = torch.tensor(tokens, dtype=torch.long)
             token_batches.append(tokens)
             
-        target_len = 4091
+        max_len_in_batch = max(t.size(0) for t in token_batches)
+        target_len = ((max_len_in_batch + 31) // 32) * 32 
+
         padded_tokens = []
         for t in token_batches:
-            if t.size(0) >= target_len:
-                padded_tokens.append(t[:target_len])
-            else:
-                padded_tokens.append(torch.cat([t, torch.zeros(target_len - t.size(0), dtype=torch.long)]))
+            padding_size = target_len - t.size(0)
+            padded_tokens.append(torch.nn.functional.pad(t, (0, padding_size), value=0))
                 
         input_ids = torch.stack(padded_tokens)
         labels = input_ids.clone()

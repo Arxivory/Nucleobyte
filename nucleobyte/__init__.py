@@ -25,9 +25,9 @@ class BlockSparseAttentionFunction(Function):
     @staticmethod
     def forward(ctx, Q_heads, K_heads, V_heads, window_radius, block_size):
         batch_size, num_heads, num_tokens, head_dim = Q_heads.shape
-        O_heads = torch.zeros_like(Q_heads)
+        O_heads = torch.empty_like(Q_heads, requires_grad=False)
 
-        LSE_heads = torch.empty((batch_size, num_heads, num_tokens), dtype=torch.float32, device=Q_heads.device)
+        LSE_heads = torch.empty((batch_size, num_heads, num_tokens), dtype=torch.float32, device=Q_heads.device, requires_grad=False)
 
         for b in range(batch_size):
             for head_idx in range(num_heads):
@@ -40,14 +40,14 @@ class BlockSparseAttentionFunction(Function):
                     num_tokens, head_dim, window_radius
                 )
 
-        ctx.save_for_backward(Q_heads, K_heads, V_heads, LSE_heads)
+        ctx.save_for_backward(Q_heads, K_heads, V_heads, LSE_heads, O_heads)
         ctx.window_radius = window_radius
         ctx.block_size = block_size
         return O_heads
 
     @staticmethod
     def backward(ctx, grad_output):
-        Q_heads, K_heads, V_heads, LSE_heads = ctx.saved_tensors
+        Q_heads, K_heads, V_heads, LSE_heads, O_heads = ctx.saved_tensors
         batch_size, num_heads, num_tokens, head_dim = Q_heads.shape
 
         grad_Q = torch.zeros_like(Q_heads)
@@ -63,6 +63,7 @@ class BlockSparseAttentionFunction(Function):
                     Q_heads[b, head_idx].data_ptr(),
                     K_heads[b, head_idx].data_ptr(),
                     V_heads[b, head_idx].data_ptr(),
+                    O_heads[b, head_idx].data_ptr(),
                     LSE_heads[b, head_idx].data_ptr(),
                     grad_Q[b, head_idx].data_ptr(),
                     grad_K[b, head_idx].data_ptr(),

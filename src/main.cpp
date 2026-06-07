@@ -47,7 +47,7 @@ PYBIND11_MODULE(_core, m) {
             py::arg("num_tokens"), py::arg("head_dim"), py::arg("window_radius"));
 
     m.def("launch_block_sparse_attn_backward_device", [](
-        uintptr_t grad_o_ptr, uintptr_t q_ptr, uintptr_t k_ptr, uintptr_t v_ptr,
+        uintptr_t grad_o_ptr, uintptr_t q_ptr, uintptr_t k_ptr, uintptr_t v_ptr, uintptr_t o_ptr,
         uintptr_t lse_ptr, uintptr_t grad_q_ptr, uintptr_t grad_k_ptr, uintptr_t grad_v_ptr,
         int num_tokens, int head_dim, int window_radius
         ) {
@@ -55,6 +55,7 @@ PYBIND11_MODULE(_core, m) {
             const float* d_Q = reinterpret_cast<const float*>(q_ptr);
             const float* d_K = reinterpret_cast<const float*>(k_ptr);
             const float* d_V = reinterpret_cast<const float*>(v_ptr);
+			const float* d_O = reinterpret_cast<const float*>(o_ptr);
             const float* d_LSE = reinterpret_cast<const float*>(lse_ptr);
 
             float* d_grad_Q = reinterpret_cast<float*>(grad_q_ptr);
@@ -62,7 +63,7 @@ PYBIND11_MODULE(_core, m) {
             float* d_grad_V = reinterpret_cast<float*>(grad_v_ptr);
 
             launch_block_sparse_attn_backward_device(
-                d_grad_O, d_Q, d_K, d_V, d_LSE, d_grad_Q, d_grad_K, d_grad_V,
+                d_grad_O, d_Q, d_K, d_V, d_O, d_LSE, d_grad_Q, d_grad_K, d_grad_V,
                num_tokens, head_dim, window_radius
             );
         }, "Executes true zero-copy VRAM-resident block-sparse attention backward gradient pass.");

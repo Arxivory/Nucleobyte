@@ -73,4 +73,4 @@ if __name__ == "__main__":
     if not os.path.exists(fasta_path):
         raise FileNotFoundError(f"Missing file: {fasta_path}")
         
-    run_keratin_memorization_demo(fasta_path, epochs=100, batch_size=2)
+    run_keratin_memorization_demo(fasta_path, epochs=200, batch_size=2)
