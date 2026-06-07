@@ -63,9 +63,9 @@ $$O_i^{\text{new}} = O_i^{\text{old}} \cdot e^{(m_i^{\text{old}} - m_i^{\text{ne
 
 Gradients are calculated inside a manual backpropagation CUDA kernel using `atomicAdd` routines to handle accumulation over shared key-value blocks. Softmax differentiation incorporates a pre-calculated row correction term $D_i$ mapped globally across dimensions:
 
-$$D_i = \sum_{k} (\text{grad_O}_{ik} \cdot O_{ik})$$
+$$D_i = \sum_{k} (\text{grad\_O}_{ik} \cdot O_{ik})$$
 
-$$\text{grad_S}_{ij} = P_{ij} \cdot (\text{grad_O}_i V_j^T - D_i)$$
+$$\text{grad\_S}_{ij} = P_{ij} \cdot (\text{grad\_O}_i V_j^T - D_i)$$
 
 ---
 
