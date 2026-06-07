@@ -36,7 +36,7 @@ class NucleoByteDataset(Dataset):
     def __getitem__(self, idx):
         seq = self.sequences[idx]
         if len(seq) > self.max_sequence_length:
-            start = 0
+            start = random.randint(0, len(seq) - self.max_sequence_length)
             seq = seq[start:start + self.max_sequence_length]
         return seq
 
