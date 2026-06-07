@@ -41,3 +41,6 @@ x86/
 *.ncu-rep
 *.nsys-rep
 *.log
+
+# --- Sample Data ---
+sampledata/
