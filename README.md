@@ -19,7 +19,7 @@ Standard natural language Processing (NLP) models face major scaling bottlenecks
 NucleoByte optimizes genomic sequence training through a highly specialized pipeline:
 
 1. **Fused 2-Bit Tokenization:** Native GPU string parsing that packs DNA bases into memory-efficient integer IDs on the fly.
-2. **Dynamic Ceiling Hardware Alignment:** An custom data pipeline that dynamically pads batches up to the nearest multiple of the hardware block size ($32$), completely wiping out artificial padding overhead.
+2. **Dynamic Ceiling Hardware Alignment:** A custom data pipeline that dynamically pads batches up to the nearest multiple of the hardware block size ($32$), completely wiping out artificial padding overhead.
 3. **Local Hybrid Block-Sparse Attention:** Restricting the model's receptive field to a tightly bounded local sliding neighborhood ($W$) to drop attention time and memory complexity from quadratic $O(N^2)$ to linear $O(N \cdot W)$.
 
 ---
