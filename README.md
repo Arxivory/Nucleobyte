@@ -6,7 +6,7 @@ NucleoByte is a high-performance, custom-engineered Transformer architecture bui
 
 ## 1. The Core Problem
 
-Standard natural language Processing (NLP) models face major scaling bottlenecks when applied to genomics:
+Standard Natural Language Processing (NLP) models face major scaling bottlenecks when applied to genomics:
 
 * **The Context Trap:** DNA sequences are continuous, massive strings (often millions of base pairs) rather than brief, punctuated sentences. Standard dense $O(N^2)$ attention scaling becomes mathematically and financially prohibitive at scale.
 * **Padding Waste:** Typical tokenizers or data collators force variable-length sequences to conform to fixed global lengths, allocating massive amounts of VRAM to zero-padding tokens that compute useless context, waste hardware cycles, and corrupt embedding tables with gradient noise.
