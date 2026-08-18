@@ -111,6 +111,7 @@ Rank 3 | Prediction: 'GGCCCC' (ID: 2645) | Confidence: 3.12%
 ```
 
 ---
+Improvement and System Hardware Validation are ongoing, with the next milestone focusing on multi-GPU scaling and mixed-precision training.
 
 ## 6. Project Directory Setup & Basic Usage
 
